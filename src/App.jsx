@@ -2,50 +2,40 @@ import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { AlertCircle, CheckCircle, Pause } from 'lucide-react';
 
-const generateTemperatureData = (days) => {
-  const dataPoints = days === 1 ? 288 : 288 * 7; // 5-minute intervals for 1 or 7 days
-  return Array.from({ length: dataPoints }, (_, i) => ({
-    time: i * 5,
-    bedTemp: Math.floor(Math.random() * (100 - 60 + 1) + 60),
-    nozzleTemp: Math.floor(Math.random() * (220 - 180 + 1) + 180),
-  }));
-};
-
-const formatXAxis = (tickItem, days) => {
-  const hours = Math.floor(tickItem / 60);
-  const minutes = tickItem % 60;
-  return days === 1 
-    ? `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`
-    : `Day ${Math.floor(hours / 24) + 1}`;
-};
-
 const Dashboard = () => {
   const [viewDays, setViewDays] = useState(1);
-  const [tempData, setTempData] = useState(generateTemperatureData(viewDays));
-  const [printStatus, setPrintStatus] = useState('Paused');
-  const [printCompletion, setPrintCompletion] = useState(45);
-  const [remainingTime, setRemainingTime] = useState('2h 15m');
-  const [printName, setPrintName] = useState('Benchy.gcode');
-  const [failureReason, setFailureReason] = useState('spaghetti');
+  const [tempData, setTempData] = useState([]);
+  const [printerStatus, setPrinterStatus] = useState({});
 
   useEffect(() => {
-    setTempData(generateTemperatureData(viewDays));
-  }, [viewDays]);
+    const fetchData = async () => {
+      try {
+        const response = await fetch('http://localhost:5000/bambu_status');
+        const data = await response.json();
+        setPrinterStatus(data);
+        
+        setTempData(prevData => {
+          const newData = [...prevData, {
+            time: new Date().toLocaleTimeString(),
+            bedTemp: parseFloat(data.bedTemper),
+            nozzleTemp: parseFloat(data.nozzleTemper)
+          }];
+          return newData.slice(-288 * viewDays); // Keep last 288 * viewDays points (5 min intervals for 1 or 7 days)
+        });
+      } catch (error) {
+        console.error('Error fetching printer status:', error);
+      }
+    };
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTempData(prevData => [
-        ...prevData.slice(1),
-        {
-          time: prevData[prevData.length - 1].time + 5,
-          bedTemp: Math.floor(Math.random() * (100 - 60 + 1) + 60),
-          nozzleTemp: Math.floor(Math.random() * (220 - 180 + 1) + 180),
-        }
-      ]);
-    }, 5000);
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [viewDays]);
+
+  const formatXAxis = (tickItem) => {
+    return viewDays === 1 ? tickItem : `Day ${Math.floor(tempData.indexOf(tickItem) / 288) + 1}`;
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100 p-8">
@@ -77,15 +67,15 @@ const Dashboard = () => {
                 <XAxis 
                   dataKey="time" 
                   stroke="#9CA3AF"
-                  tickFormatter={(tick) => formatXAxis(tick, viewDays)}
-                  label={{ value: viewDays === 1 ? 'Time (HH:MM)' : 'Days', position: 'insideBottom', offset: -5, fill: '#9CA3AF' }} 
+                  tickFormatter={formatXAxis}
+                  label={{ value: viewDays === 1 ? 'Time' : 'Days', position: 'insideBottom', offset: -5, fill: '#9CA3AF' }} 
                 />
                 <YAxis 
                   stroke="#9CA3AF"
-                  label={{ value: 'Temperature (°C)', angle: -90, position: 'insideLeft', fill: '#9CA3AF' }} 
+                  label={{ value: 'Temperature (°C)', angle: -90, position: 'inside', fill: '#9CA3AF' }} 
                 />
                 <Tooltip contentStyle={{ backgroundColor: '#1F2937', border: 'none' }} />
-                <Legend />
+                <Legend verticalAlign='bottom' />
                 <Line type="monotone" dataKey="bedTemp" stroke="#8B5CF6" name="Bed Temp" dot={false} />
                 <Line type="monotone" dataKey="nozzleTemp" stroke="#10B981" name="Nozzle Temp" dot={false} />
               </LineChart>
@@ -97,39 +87,51 @@ const Dashboard = () => {
             <div className="space-y-4">
               <div>
                 <p className="text-sm text-gray-400">Print Name</p>
-                <p className="text-lg font-medium">{printName}</p>
+                <p className="text-lg font-medium">{printerStatus.subtask_name || 'N/A'}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-400">Status</p>
                 <div className="flex items-center space-x-2">
-                  {printStatus === 'Printing' && <CheckCircle className="text-green-400" />}
-                  {printStatus === 'Paused' && <Pause className="text-yellow-400" />}
-                  {printStatus === 'Failed' && <AlertCircle className="text-red-400" />}
-                  <p className="text-lg font-medium">{printStatus}</p>
+                  {printerStatus.gcodeState === 'RUNNING' && <CheckCircle className="text-green-400" />}
+                  {printerStatus.gcodeState === 'PAUSE' && <Pause className="text-yellow-400" />}
+                  {printerStatus.gcodeState === 'FAILED' && <AlertCircle className="text-red-400" />}
+                  <p className="text-lg font-medium">{printerStatus.gcodeState || 'N/A'}</p>
                 </div>
               </div>
               <div>
                 <p className="text-sm text-gray-400">Completion</p>
                 <div className="flex items-center space-x-4">
-                  <p className="text-2xl font-bold">{printCompletion}%</p>
+                  <p className="text-2xl font-bold">{printerStatus.mcPercent || '0'}%</p>
                   <div className="flex-grow bg-gray-700 rounded-full h-2.5">
                     <div
                       className="bg-blue-500 h-2.5 rounded-full"
-                      style={{ width: `${printCompletion}%` }}
+                      style={{ width: `${printerStatus.mcPercent || 0}%` }}
                     ></div>
                   </div>
                 </div>
               </div>
               <div>
                 <p className="text-sm text-gray-400">Remaining Time</p>
-                <p className="text-lg font-medium">{remainingTime}</p>
+                <p className="text-lg font-medium">{printerStatus.mcRemainingTime ? `${printerStatus.mcRemainingTime} minutes` : 'N/A'}</p>
               </div>
-              {failureReason && (
+              {printerStatus.failReason !== '0' && (
                 <div>
                   <p className="text-sm text-gray-400">Failure Reason</p>
-                  <p className="text-lg font-medium text-red-400">{failureReason}</p>
+                  <p className="text-lg font-medium text-red-400">Error code: {printerStatus.failReason}</p>
                 </div>
               )}
+              <div>
+                <p className="text-sm text-gray-400">Current Temperatures</p>
+                <p className="text-lg font-medium">
+                  Bed: {printerStatus.bedTemper}°C / {printerStatus.bedTargetTemper}°C
+                </p>
+                <p className="text-lg font-medium">
+                  Nozzle: {printerStatus.nozzleTemper}°C / {printerStatus.nozzleTargetTemper}°C
+                </p>
+                <p className="text-lg font-medium">
+                  Chamber: {printerStatus.chamberTemper}°C
+                </p>
+              </div>
             </div>
           </div>
         </div>
